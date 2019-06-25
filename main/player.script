@@ -65,7 +65,7 @@ end
 local function average_blob_position(blobs)
 	local count = 0
 	local position = vmath.vector3()
-	for blob,_ in pairs(blobs) do
+	for i,blob in pairs(blobs) do
 		count = count + 1
 		position = position + go.get_position(blob.id)
 	end
@@ -75,33 +75,28 @@ local function average_blob_position(blobs)
 	return position
 end
 
-local function create_blob(self)
-	-- get list of blobs to connect to
-	-- and mid-point of the blobs
-	local blobs = {}
-	local position = nil
-	if #self.blobs == 0 then
-		position = go.get_position()
-	else
-		blobs[random_blob(self)] = true
-		blobs[random_blob(self)] = true
-		blobs[random_blob(self)] = true
-		position = average_blob_position(blobs)
-	end	
 
-	-- spawn blob at mid-point of blobs to connect
-	-- with a little bit of random deviation
+
+local function create_blobs(self, count)
 	local r = 10
-	position = position + vmath.vector3(math.random(-r, r), math.random(-r, r), 0)
-	local blob = spawn_blob(position)
-
-	-- connect spawned blob with the other blobs
-	for b,_ in pairs(blobs) do
-		connect_blobs(self, blob, b)
+	local position = go.get_position() + vmath.vector3(math.random(-r, r), math.random(-r, r), 0)
+	for i=1,count do
+		local blob = spawn_blob(position)
+		table.insert(self.blobs, blob)
 	end
+	for i=1,count do
+		local blob = self.blobs[i]
+		local blobs = {}
+		blobs[random_blob(self)] = true
+		blobs[random_blob(self)] = true
+		blobs[random_blob(self)] = true
+		blobs[blob] = nil
 
-	table.insert(self.blobs, blob)
-	return blob
+		-- connect spawned blob with the other blobs
+		for b,_ in pairs(blobs) do
+			connect_blobs(self, blob, b)
+		end
+	end
 end
 
 local TENTACLE_GROUPS = { GROUND }
@@ -148,7 +143,9 @@ local function move_tenacles(self)
 			end
 			if result then
 				tentacle.moving = true
-				go.animate(tentacle.id, "position", go.PLAYBACK_ONCE_FORWARD, result.position, go.EASING_INOUTQUAD, math.random(2,4)/10, 0, function()
+				local distance = vmath.length(from - result.position)
+				local duration = distance / 250
+				go.animate(tentacle.id, "position", go.PLAYBACK_ONCE_FORWARD, result.position, go.EASING_INQUAD, duration, 0, function()
 					tentacle.moving = false
 				end)
 			end
@@ -168,22 +165,18 @@ function init(self)
 	self.tentacles = {}
 	self.direction = vmath.vector3(0)
 	
-	local blob = create_blob(self)
-	go.set_parent(".", blob.id, true)
-	
-	for i=1,20 do
-		create_blob(self)
-	end
+	create_blobs(self, 20)
 
 	timer.delay(0.2, false, function()
-		local LENGTH = 250
-		launch_tentacle(self, vmath.vector3(-LENGTH, -LENGTH * 0.5, 0))
-		launch_tentacle(self, vmath.vector3(0, -LENGTH * 0.5, 0))
-		launch_tentacle(self, vmath.vector3(LENGTH, -LENGTH * 0.5, 0))
+		local X = 250
+		local Y = 250
+		launch_tentacle(self, vmath.vector3(-X, -Y, 0))
+		--launch_tentacle(self, vmath.vector3(0, -Y, 0))
+		launch_tentacle(self, vmath.vector3(X, -Y, 0))
 
-		launch_tentacle(self, vmath.vector3(-LENGTH, LENGTH * 0.5, 0))
-		launch_tentacle(self, vmath.vector3(0, LENGTH * 0.5, 0))
-		launch_tentacle(self, vmath.vector3(LENGTH, LENGTH * 0.5, 0))
+		launch_tentacle(self, vmath.vector3(-X, Y, 0))
+		--launch_tentacle(self, vmath.vector3(0, Y, 0))
+		launch_tentacle(self, vmath.vector3(X, Y, 0))
 	end)
 end
 
@@ -193,9 +186,12 @@ function final(self)
 end
 
 function update(self, dt)
+	
 	if vmath.length(self.direction) > 0 then
 		move_tenacles(self)
 	end
+	local position = average_blob_position(self.blobs)
+	go.set_position(position)
 end
 
 function on_message(self, message_id, message, sender)

@@ -67,7 +67,7 @@ instances {
     }
     properties {
       id: "follow_lerp"
-      value: "0.1"
+      value: "0.9"
       type: PROPERTY_TYPE_NUMBER
     }
   }
