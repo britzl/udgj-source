@@ -1,0 +1,240 @@
+local mapper = require "in.mapper"
+
+local LEFT = hash("left")
+local RIGHT = hash("right")
+local UP = hash("up")
+local DOWN = hash("down")
+
+local ZERO_V3 = vmath.vector3(0,0,0)
+
+local GROUND = hash("ground")
+
+
+local function spawn(factory_url, position)
+	local spawn_id = factory.create(factory_url, position)
+	local spawn = {
+		id = spawn_id,
+		collision_id = msg.url(nil, spawn_id, "collisionobject"),
+		joints = {},
+	}
+	return spawn
+end
+
+local function spawn_blob(position)
+	return spawn("#blobfactory", position)
+end
+
+local function spawn_tentacle(position)
+	return spawn("#tentaclefactory", position)
+end
+
+
+
+local joint_count = 0
+local function create_joint_id()
+	joint_count = joint_count + 1
+	return hash("joint" .. tostring(joint_count))
+end
+
+local function random_blob(self)
+	local count = #self.blobs
+	if count == 0 then
+		return nil
+	end
+	local from = math.max(1, math.floor(count * 0.70))
+	local to = count
+	return self.blobs[math.random(from, to)]
+end
+
+local function connect_blobs(self, blob1, blob2)
+	if blob1.joints[blob2] then
+		-- already connected
+		return
+	end
+	
+	local joint_id = create_joint_id()
+	local properties = {
+		length = math.random(40, 80),
+		frequency = 10,
+		damping = 0.2,
+	}
+	blob1.joints[blob2] = joint_id
+	physics.create_joint(physics.JOINT_TYPE_SPRING, blob1.collision_id, joint_id, ZERO_V3, blob2.collision_id, ZERO_V3, properties)
+end
+
+local function average_blob_position(blobs)
+	local count = 0
+	local position = vmath.vector3()
+	for blob,_ in pairs(blobs) do
+		count = count + 1
+		position = position + go.get_position(blob.id)
+	end
+	position.x = position.x / count
+	position.y = position.y / count
+	position.z = position.z / count
+	return position
+end
+
+local function create_blob(self)
+	-- get list of blobs to connect to
+	-- and mid-point of the blobs
+	local blobs = {}
+	local position = nil
+	if #self.blobs == 0 then
+		position = go.get_position()
+	else
+		blobs[random_blob(self)] = true
+		blobs[random_blob(self)] = true
+		blobs[random_blob(self)] = true
+		position = average_blob_position(blobs)
+	end	
+
+	-- spawn blob at mid-point of blobs to connect
+	-- with a little bit of random deviation
+	local r = 10
+	position = position + vmath.vector3(math.random(-r, r), math.random(-r, r), 0)
+	local blob = spawn_blob(position)
+
+	-- connect spawned blob with the other blobs
+	for b,_ in pairs(blobs) do
+		connect_blobs(self, blob, b)
+	end
+
+	table.insert(self.blobs, blob)
+	return blob
+end
+
+local TENTACLE_GROUPS = { GROUND }
+
+local function launch_tentacle(self, offset)
+	local from = go.get_world_position()
+	local to = from + offset
+	local result = physics.raycast(from, to, TENTACLE_GROUPS)
+	if not result then
+		return
+	end
+
+	local blob = random_blob(self)
+	local tentacle = spawn_tentacle(result.position)
+	tentacle.blob = blob
+	tentacle.offset = offset
+
+	local length = vmath.length(from - result.position)
+	local joint_id = create_joint_id()
+	local properties = {
+		length = length * 0.8,
+		frequency = 10,
+		damping = 0.1,
+	}
+	physics.create_joint(physics.JOINT_TYPE_SPRING, blob.collision_id, joint_id, ZERO_V3, tentacle.collision_id, ZERO_V3, properties)
+
+	tentacle.joints[blob] = joint_id
+	
+	table.insert(self.tentacles, tentacle)
+end
+
+local function move_tenacles(self)
+	for _,tentacle in pairs(self.tentacles) do
+		if not tentacle.moving then
+			local from = go.get_world_position(tentacle.blob.id)
+			local to = from + tentacle.offset
+			local offset = vmath.vector3(400 * self.direction.x, 400 * self.direction.y, 0)
+
+			local result = physics.raycast(from, to + offset, TENTACLE_GROUPS)
+			if not result then
+				offset.x = -offset.x
+				offset.y = -offset.y
+				result = physics.raycast(from, to + offset, TENTACLE_GROUPS)
+			end
+			if result then
+				tentacle.moving = true
+				go.animate(tentacle.id, "position", go.PLAYBACK_ONCE_FORWARD, result.position, go.EASING_INOUTQUAD, math.random(2,4)/10, 0, function()
+					tentacle.moving = false
+				end)
+			end
+		end
+	end
+end
+
+function init(self)
+	math.randomseed(socket.gettime()) math.random()
+	msg.post(".", "acquire_input_focus")
+	mapper.bind(mapper.KEY_LEFT, LEFT)
+	mapper.bind(mapper.KEY_RIGHT, RIGHT)
+	mapper.bind(mapper.KEY_UP, UP)
+	mapper.bind(mapper.KEY_DOWN, DOWN)
+
+	self.blobs = {}
+	self.tentacles = {}
+	self.direction = vmath.vector3(0)
+	
+	local blob = create_blob(self)
+	go.set_parent(".", blob.id, true)
+	
+	for i=1,20 do
+		create_blob(self)
+	end
+
+	timer.delay(0.2, false, function()
+		local LENGTH = 250
+		launch_tentacle(self, vmath.vector3(-LENGTH, -LENGTH * 0.5, 0))
+		launch_tentacle(self, vmath.vector3(0, -LENGTH * 0.5, 0))
+		launch_tentacle(self, vmath.vector3(LENGTH, -LENGTH * 0.5, 0))
+
+		launch_tentacle(self, vmath.vector3(-LENGTH, LENGTH * 0.5, 0))
+		launch_tentacle(self, vmath.vector3(0, LENGTH * 0.5, 0))
+		launch_tentacle(self, vmath.vector3(LENGTH, LENGTH * 0.5, 0))
+	end)
+end
+
+function final(self)
+	-- Add finalization code here
+	-- Remove this function if not needed
+end
+
+function update(self, dt)
+	if vmath.length(self.direction) > 0 then
+		move_tenacles(self)
+	end
+end
+
+function on_message(self, message_id, message, sender)
+	-- Add message-handling code here
+	-- Remove this function if not needed
+end
+
+
+function on_input(self, action_id, action)
+	action_id = mapper.on_input(action_id)
+	if action_id == LEFT then
+		if action.pressed then
+			self.direction.x = -1
+		elseif action.released then
+			self.direction.x = 0
+		end
+	elseif action_id == RIGHT then
+		if action.pressed then
+			self.direction.x = 1
+		elseif action.released then
+			self.direction.x = 0
+		end
+	elseif action_id == UP then
+		if action.pressed then
+			self.direction.y = 1
+		elseif action.released then
+			self.direction.y = 0
+		end
+	elseif action_id == DOWN then
+		if action.pressed then
+			self.direction.y = -1
+		elseif action.released then
+			self.direction.y = 0
+		end
+	end
+end
+
+
+function on_reload(self)
+	-- Add reload-handling code here
+	-- Remove this function if not needed
+end
